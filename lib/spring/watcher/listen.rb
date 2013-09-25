@@ -1,4 +1,5 @@
-gem "listen", "~> 1.0"
+gem "listen", "~> 2.0.0.beta.2"
+require "pathname"
 require "listen"
 require "listen/version"
 
@@ -9,9 +10,7 @@ module Spring
 
       def start
         unless @listener
-          @listener = ::Listen.to(*base_directories, relative_paths: false)
-          @listener.latency(latency)
-          @listener.change(&method(:changed))
+          @listener = ::Listen.to(*base_directories, :latency => latency, &method(:changed))
           @listener.start
         end
       end
@@ -45,7 +44,7 @@ module Spring
         ([root] +
           files.reject       { |f| f.start_with? root }.map { |f| File.expand_path("#{f}/..") } +
           directories.reject { |d| d.start_with? root }
-        ).uniq
+        ).uniq.map { |path| Pathname.new(path) }
       end
     end
   end
