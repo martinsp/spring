@@ -1,4 +1,4 @@
-gem "listen", "~> 2.0.0.beta.2"
+gem "listen", "~> 2.0"
 require "pathname"
 require "listen"
 require "listen/version"
