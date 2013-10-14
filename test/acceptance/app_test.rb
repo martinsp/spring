@@ -230,7 +230,7 @@ class AppTest < ActiveSupport::TestCase
     File.write(@controller, @controller_contents)
     FileUtils.rm_f("#{app_root}/config/spring.rb")
 
-    Celluloid.shutdown
+    # Celluloid.shutdown
   end
 
   test "basic" do
