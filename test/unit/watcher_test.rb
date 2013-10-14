@@ -154,14 +154,10 @@ module WatcherTests
   end
 end
 
-require 'celluloid/test'
 class ListenWatcherTest < ActiveSupport::TestCase
   include WatcherTests
 
-  setup {
-    Celluloid.boot
-    Celluloid.logger.level = Logger::WARN
-  }
+  setup { Celluloid.boot }
   teardown { Celluloid.shutdown }
 
   def watcher_class

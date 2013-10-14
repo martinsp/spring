@@ -220,6 +220,8 @@ class AppTest < ActiveSupport::TestCase
 
     @test_contents       = File.read(@test)
     @controller_contents = File.read(@controller)
+
+    Celluloid.boot
   end
 
   teardown do
@@ -227,6 +229,8 @@ class AppTest < ActiveSupport::TestCase
     File.write(@test, @test_contents)
     File.write(@controller, @controller_contents)
     FileUtils.rm_f("#{app_root}/config/spring.rb")
+
+    Celluloid.shutdown
   end
 
   test "basic" do
