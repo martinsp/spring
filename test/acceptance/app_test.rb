@@ -304,7 +304,7 @@ class AppTest < ActiveSupport::TestCase
     begin
       gemfile = app_root.join("Gemfile")
       gemfile_contents = gemfile.read
-      File.write(gemfile, gemfile_contents + "\ngem 'listen', '~> 1.0'")
+      File.write(gemfile, gemfile_contents + "\ngem 'listen', '~> 2.1'")
 
       File.write("#{app_root}/config/spring.rb", "Spring.watch_method = :listen")
 
