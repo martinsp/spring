@@ -151,13 +151,13 @@ class AppTest < ActiveSupport::TestCase
   end
 
   def assert_success(command, expected_output = nil)
-    artifacts = app_run(command)
+    artifacts = app_run(*Array(command))
     assert artifacts[:status].success?, "expected successful exit status\n\n#{debug(artifacts)}"
     assert_output artifacts, expected_output if expected_output
   end
 
   def assert_failure(command, expected_output = nil)
-    artifacts = app_run(command)
+    artifacts = app_run(*Array(command))
     assert !artifacts[:status].success?, "expected unsuccessful exit status\n\n#{debug(artifacts)}"
     assert_output artifacts, expected_output if expected_output
   end
@@ -179,13 +179,13 @@ class AppTest < ActiveSupport::TestCase
 
   def generate_app
     Bundler.with_clean_env do
-      system "(gem list rails --installed --version '#{rails_version}' || " \
-             "gem install rails --version '#{rails_version}') > /dev/null"
+      assert system("(gem list rails --installed --version '#{rails_version}' || " \
+                      "gem install rails --version '#{rails_version}') > /dev/null")
 
       # Have to shell out otherwise bundler prevents us finding the gem
       version = `ruby -e 'puts Gem::Specification.find_by_name("rails", "#{rails_version}").version'`.chomp
 
-      system "rails _#{version}_ new #{app_root} --skip-bundle --skip-javascript --skip-sprockets > /dev/null"
+      assert system("rails _#{version}_ new #{app_root} --skip-bundle --skip-javascript --skip-sprockets > /dev/null")
 
       FileUtils.mkdir_p(gem_home)
       FileUtils.mkdir_p(user_home)
@@ -196,16 +196,17 @@ class AppTest < ActiveSupport::TestCase
   def install
     generate_app unless app_root.exist?
 
-    system "gem build spring.gemspec 2>/dev/null 1>/dev/null"
-    app_run "gem install ../../../spring-#{Spring::VERSION}.gem"
-    app_run "(gem list bundler | grep bundler) || gem install bundler", timeout: nil
-    app_run "bundle check || bundle update", timeout: nil
+    assert system("gem build spring.gemspec 2>/dev/null 1>/dev/null")
+
+    assert_success "gem install ../../../spring-#{Spring::VERSION}.gem"
+    assert_success ["(gem list bundler | grep bundler) || gem install bundler", timeout: nil]
+    assert_success ["bundle check || bundle update", timeout: nil]
 
     unless File.exist?(@controller)
-      app_run "bundle exec rails g scaffold post title:string"
+      assert_success "bundle exec rails g scaffold post title:string"
     end
 
-    app_run "bundle exec rake db:migrate db:test:clone"
+    assert_success "bundle exec rake db:migrate db:test:clone"
     @@installed = true
   end
 
@@ -307,18 +308,12 @@ class AppTest < ActiveSupport::TestCase
 
       File.write("#{app_root}/config/spring.rb", "Spring.watch_method = :listen")
 
-      app_run "bundle install", timeout: nil
+      assert_success ["bundle install", timeout: nil]
 
       env["RAILS_ENV"] = "test"
       assert_success "#{spring} rails runner 'puts Spring.watcher.class'", stdout: "Listen"
 
-      # This randomly fails on the CI for unknown reasons. I've spent quite a bit of
-      # effort trying to figure out why without success. I've decided to give up in
-      # order to focus my limited time on more important things. In general I recommend
-      # using the polling watcher unless there's a compelling reason not to. So somebody
-      # who actually uses the listen watcher (not me) sould probably try to figure this
-      # out.
-      assert_app_reloaded unless ENV["CI"]
+      assert_app_reloaded
     ensure
       File.write(gemfile, gemfile_contents)
       assert_success "bundle check"

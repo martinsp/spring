@@ -38,15 +38,17 @@ module Spring
 
         items = items.select(&:exist?)
 
-        items.each do |item|
-          if item.directory?
-            directories << item.realpath.to_s
-          else
-            files << item.realpath.to_s
+        synchronize {
+          items.each do |item|
+            if item.directory?
+              directories << item.realpath.to_s
+            else
+              files << item.realpath.to_s
+            end
           end
-        end
 
-        subjects_changed
+          subjects_changed
+        }
       end
 
       def stale?
