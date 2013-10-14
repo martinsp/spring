@@ -158,7 +158,7 @@ class ListenWatcherTest < ActiveSupport::TestCase
   include WatcherTests
 
   setup { Celluloid.boot }
-  # teardown { Celluloid.shutdown }
+  teardown { Celluloid.shutdown }
 
   def watcher_class
     Spring::Watcher::Listen
