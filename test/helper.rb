@@ -4,6 +4,7 @@ require "bundler/setup"
 require "active_support/test_case"
 require "minitest/autorun"
 
+require "celluloid"
 Celluloid.logger.level = Logger::WARN
 
 TEST_ROOT = File.expand_path('..', __FILE__)
