@@ -1,5 +1,4 @@
-gem "listen", "~> 2.0"
-require "pathname"
+gem "listen", "~> 2.1"
 require "listen"
 require "listen/version"
 
