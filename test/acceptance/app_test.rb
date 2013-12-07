@@ -227,6 +227,8 @@ class AppTest < ActiveSupport::TestCase
   @@installed = false
 
   setup do
+    Celluloid.boot
+
     @test       = "#{app_root}/test/#{rails_3? ? 'functional' : 'controllers'}/posts_controller_test.rb"
     @controller = "#{app_root}/app/controllers/posts_controller.rb"
 
@@ -234,17 +236,15 @@ class AppTest < ActiveSupport::TestCase
 
     @test_contents       = File.read(@test)
     @controller_contents = File.read(@controller)
-
-    Celluloid.boot
   end
 
   teardown do
+    Listen.stop
+
     app_run "#{spring} stop"
     File.write(@test, @test_contents)
     File.write(@controller, @controller_contents)
     FileUtils.rm_f("#{app_root}/config/spring.rb")
-
-    Celluloid.shutdown
   end
 
   test "basic" do
