@@ -2,6 +2,7 @@
 require 'helper'
 require 'io/wait'
 require "timeout"
+require "listen"
 require "spring/sid"
 require "spring/env"
 
