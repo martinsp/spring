@@ -1,18 +1,25 @@
 require "pathname"
 require "fileutils"
+require "digest/md5"
+require "tmpdir"
 
 require "spring/version"
 require "spring/sid"
+require "spring/configuration"
 
 module Spring
   IGNORE_SIGNALS = %w(INT QUIT)
 
   class Env
-    attr_reader :root, :log_file
+    attr_reader :log_file
 
     def initialize(root = nil)
-      @root     = root || Pathname.new(File.expand_path('.'))
+      @root     = root
       @log_file = File.open(ENV["SPRING_LOG"] || "/dev/null", "a")
+    end
+
+    def root
+      @root ||= Spring.application_root_path
     end
 
     def version
@@ -20,13 +27,17 @@ module Spring
     end
 
     def tmp_path
-      path = default_tmp_path
+      path = Pathname.new(Dir.tmpdir + "/spring")
       FileUtils.mkdir_p(path) unless path.exist?
       path
     end
 
+    def application_id
+      Digest::MD5.hexdigest(root.to_s)
+    end
+
     def socket_path
-      tmp_path.join("spring")
+      tmp_path.join(application_id)
     end
 
     def socket_name
@@ -34,7 +45,7 @@ module Spring
     end
 
     def pidfile_path
-      tmp_path.join("spring.pid")
+      tmp_path.join("#{application_id}.pid")
     end
 
     def pid
@@ -67,16 +78,6 @@ module Spring
     def log(message)
       log_file.puts "[#{Time.now}] #{message}"
       log_file.flush
-    end
-
-    private
-
-    def default_tmp_path
-      if ENV['SPRING_TMP_PATH']
-        Pathname.new(ENV['SPRING_TMP_PATH'])
-      else
-        root.join('tmp/spring')
-      end
     end
   end
 end

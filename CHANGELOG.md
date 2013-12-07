@@ -1,3 +1,68 @@
+## 1.0.0
+
+* Enterprise ready secret sauce added
+
+## 0.9.2
+
+* Bugfix: environment variables set by bundler (`BUNDLE_GEMFILE`,
+  `RUBYOPT`, etc...) were being removed from the environment.
+* Ensure we only run the code reloader when files have actually changed.
+  This issue became more prominent with Rails 4, since Rails 4 will now
+  reload routes whenever the code is reloaded (see
+  https://github.com/rails/rails/commit/b9b06daa915fdc4d11e8cfe11a7175e5cd8f104f).
+* Allow spring to be used in a descendant directory of the application
+  root
+* Use the system tmpdir for our temporary files. Previously we used
+  `APP_ROOT/tmp/spring`, which caused problems on filesystems which did
+  not support sockets, and also caused problems if `APP_ROOT` was
+  sufficiently deep in the filesystem to exhaust the operating system's
+  socket name limit. Hence we had a `SPRING_TMP_PATH` environment
+  variable for configuration. We now use `/tmp/spring/[md5(APP_ROOT)]`
+  for the socket and `/tmp/spring/[md5(APP_ROOT)].pid` for the pid file.
+  Thanks @Kriechi for the suggestion. Setting `SPRING_TMP_PATH` no longer
+  has any effect.
+
+## 0.9.1
+
+* Environment variables which were created during application startup are no
+  longer overwritten.
+* Support for generating multiple binstubs at once. Use --all to
+  generate all, otherwise you can pass multiple command names to the
+  binstub command.
+* The `testunit` command has been extracted to the
+  `spring-commands-testunit` gem, because it's not necessary in Rails 4,
+  where you can just run `rake test path/to/test`.
+* The `~/.spring.rb` config file is loaded before bundler, so it's a good
+  place to require extra commands which you want to use in all projects,
+  without having to add those commands to the Gemfile of each individual
+  project.
+* Any gems in the bundle with names which start with "spring-commands-"
+  are now autoloaded. This makes it less faffy to add additional
+  commands.
+
+## 0.9.0
+
+* Display spring version in the help message
+* Remove workaround for Rubygems performance issue. This issue is solved
+  with Rubygems 2.1, so we no longer need to generate a "spring" binstub
+  file. We warn users if they are not taking advantage of the Rubygems
+  perf fix (e.g. if they are not on 2.1, or haven't run `gem pristine
+  --all`). To upgrade, delete your `bin/spring` and re-run `spring
+  binstub` for each of your binstubs.
+* Binstubs now fall back to non-spring execution of a command if the
+  spring gem is not present. This might be useful for production
+  environments.
+* The ENV will be replaced on each run to match the ENV which exists
+  when the spring command is actually run (rather than the ENV which
+  exists when spring first starts).
+* Specifying the rails env after the rake command (e.g. `rake
+  RAILS_ENV=test db:migrate`) now works as expected.
+* Provide an explicit way to set the environment to use when running
+  `rake` on its own.
+* The `rspec` and `cucumber` commands are no longer shipped by default.
+  They've been moved to the `spring-commands-rspec` and
+  `spring-commands-cucumber` gems.
+
 ## 0.0.11
 
 * Added the `rails destroy` command.

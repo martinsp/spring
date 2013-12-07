@@ -46,12 +46,6 @@ module Spring
         ActiveSupport::Dependencies.mechanism = :load
       end
 
-      # Ensure eager loading does not take place, even though it usually would do
-      # in test mode with config.cache_classes = true. Eager loading in this situation
-      # just makes the initial run take longer without much gain in subsequent runs,
-      # at least in my testing.
-      Rails::Application::Finisher.initializers.delete_if { |i| i.name == :eager_load! }
-
       require Spring.application_root_path.join("config", "environment")
 
       Rails.application.config.cache_classes = false
@@ -98,22 +92,31 @@ module Spring
 
       preload unless preloaded?
 
-      args    = JSON.load(client.read(client.gets.to_i))
-      command = Spring.command(args.shift)
+      args, env = JSON.load(client.read(client.gets.to_i)).values_at("args", "env")
+      command   = Spring.command(args.shift)
 
       connect_database
       setup command
 
-      ActionDispatch::Reloader.cleanup!
-      ActionDispatch::Reloader.prepare!
+      if Rails.application.reloaders.any?(&:updated?)
+        ActionDispatch::Reloader.cleanup!
+        ActionDispatch::Reloader.prepare!
+      end
 
       pid = fork {
         Process.setsid
         STDIN.reopen(streams.last)
         IGNORE_SIGNALS.each { |sig| trap(sig, "DEFAULT") }
 
-        connect_database
         ARGV.replace(args)
+
+        # Delete all env vars which are unchanged from before spring started
+        Spring.original_env.each { |k, v| ENV.delete k if ENV[k] == v }
+
+        # Load in the current env vars, except those which *were* changed when spring started
+        env.each { |k, v| ENV[k] ||= v }
+
+        connect_database
         srand
 
         invoke_after_fork_callbacks

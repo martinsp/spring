@@ -174,13 +174,15 @@ class AppTest < ActiveSupport::TestCase
   end
 
   def spring_test_command
-    "#{spring} testunit #{@test}"
+    "#{spring} #{rails_3? ? 'testunit' : 'rake test'} #{@test}"
   end
 
   def generate_app
     Bundler.with_clean_env do
+      # Sporadic SSL errors keep causing test failures so there are anti-SSL workarounds here
+
       assert system("(gem list rails --installed --version '#{rails_version}' || " \
-                      "gem install rails --version '#{rails_version}') > /dev/null")
+                      "gem install rails --clear-sources --source http://rubygems.org --version '#{rails_version}') > /dev/null")
 
       # Have to shell out otherwise bundler prevents us finding the gem
       version = `ruby -e 'puts Gem::Specification.find_by_name("rails", "#{rails_version}").version'`.chomp
@@ -190,6 +192,18 @@ class AppTest < ActiveSupport::TestCase
       FileUtils.mkdir_p(gem_home)
       FileUtils.mkdir_p(user_home)
       FileUtils.rm_rf("#{app_root}/test/performance/")
+
+      if rails_3?
+        File.write(
+          "#{app_root}/Gemfile",
+          File.read("#{app_root}/Gemfile") + "gem 'spring-commands-testunit'\n"
+        )
+      end
+
+      File.write(
+        "#{app_root}/Gemfile",
+        File.read("#{app_root}/Gemfile").sub("https://rubygems.org", "http://rubygems.org")
+      )
     end
   end
 
@@ -198,7 +212,7 @@ class AppTest < ActiveSupport::TestCase
 
     assert system("gem build spring.gemspec 2>/dev/null 1>/dev/null")
 
-    assert_success "gem install ../../../spring-#{Spring::VERSION}.gem"
+    assert_success ["gem install ../../../spring-#{Spring::VERSION}.gem", timeout: nil]
     assert_success ["(gem list bundler | grep bundler) || gem install bundler", timeout: nil]
     assert_success ["bundle check || bundle update", timeout: nil]
 
@@ -370,11 +384,17 @@ class AppTest < ActiveSupport::TestCase
       FileUtils.mv "#{app_root}/bin", "#{app_root}/bin~" if File.exist?("#{app_root}/bin")
 
       app_run "#{spring} binstub rake"
-      app_run "#{spring} binstub rails"
-      assert_success "bin/spring help"
       assert_success "bin/rake -T", stdout: "rake db:migrate"
+
+      app_run "#{spring} binstub rake rails"
       assert_success "bin/rails runner 'puts %(omg)'", stdout: "omg"
       assert_success "bin/rails server --help", stdout: "Usage: rails server"
+
+      FileUtils.rm ["#{app_root}/bin/rails", "#{app_root}/bin/rake"]
+
+      app_run "#{spring} binstub --all"
+      assert_success "bin/rake -T", stdout: "rake db:migrate"
+      assert_success "bin/rails runner 'puts %(omg)'", stdout: "omg"
     ensure
       if File.exist?("#{app_root}/bin~")
         FileUtils.rm_rf "#{app_root}/bin"
@@ -427,6 +447,28 @@ class AppTest < ActiveSupport::TestCase
     assert_success "#{spring} rake -p 'Rails.env'", stdout: "production"
   end
 
+  test "setting env vars with rake" do
+    begin
+      File.write("#{app_root}/lib/tasks/env.rake", <<-'CODE')
+      task :print_rails_env => :environment do
+        puts Rails.env
+      end
+
+      task :print_env do
+        ENV.each { |k, v| puts "#{k}=#{v}" }
+      end
+
+      task(:default).clear.enhance [:print_rails_env]
+      CODE
+
+      assert_success "#{spring} rake RAILS_ENV=test print_rails_env", stdout: "test"
+      assert_success "#{spring} rake FOO=bar print_env", stdout: "FOO=bar"
+      assert_success "#{spring} rake", stdout: "test"
+    ensure
+      FileUtils.rm_f("#{app_root}/lib/tasks/env.rake")
+    end
+  end
+
   test "changing the Gemfile restarts the server" do
     begin
       gemfile = app_root.join("Gemfile")
@@ -442,6 +484,32 @@ class AppTest < ActiveSupport::TestCase
     ensure
       File.write(gemfile, gemfile_contents)
       assert_success "bundle check"
+    end
+  end
+
+  test "changing the environment between runs" do
+    begin
+      application = "#{app_root}/config/application.rb"
+      application_contents = File.read(application)
+
+      File.write(application, "#{application_contents}\nENV['BAR'] = 'bar'")
+
+      env["OMG"] = "1"
+      env["FOO"] = "1"
+      env["RUBYOPT"] = "-rubygems"
+
+      assert_success %(#{spring} rails runner 'p ENV["OMG"]'), stdout: "1"
+      assert_success %(#{spring} rails runner 'p ENV["BAR"]'), stdout: "bar"
+      assert_success %(#{spring} rails runner 'p ENV.key?("BUNDLE_GEMFILE")'), stdout: "true"
+      assert_success %(#{spring} rails runner 'p ENV["RUBYOPT"]'), stdout: "bundler"
+
+      env["OMG"] = "2"
+      env.delete "FOO"
+
+      assert_success %(#{spring} rails runner 'p ENV["OMG"]'), stdout: "2"
+      assert_success %(#{spring} rails runner 'p ENV.key?("FOO")'), stdout: "false"
+    ensure
+      File.write(application, application_contents)
     end
   end
 end

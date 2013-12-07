@@ -1,10 +1,10 @@
 module Spring
   module Client
     class Binstub < Command
-      attr_reader :bindir, :name
+      attr_reader :bindir, :commands
 
       def self.description
-        "Generate spring based binstubs."
+        "Generate spring based binstubs. Use --all to generate a binstub for all known commands."
       end
 
       def self.call(args)
@@ -12,64 +12,68 @@ module Spring
         super
       end
 
-      def initialize(args)
-        super
-
-        @bindir = env.root.join("bin")
-        @name   = args[1]
-      end
-
-      def call
-        if Spring.command?(name) || name == "rails"
-          bindir.mkdir unless bindir.exist?
-          generate_spring_binstub
-          generate_command_binstub
-        else
-          $stderr.puts "The '#{name}' command is not known to spring."
-          exit 1
+      class RailsCommand
+        def fallback
+          <<CODE
+APP_PATH = File.expand_path('../../config/application',  __FILE__)
+require_relative '../config/boot'
+require 'rails/commands'
+CODE
         end
       end
 
-      def spring_binstub
-        bindir.join("spring")
+      def initialize(args)
+        super
+
+        @bindir   = env.root.join("bin")
+        @commands = args.drop(1).inject({}) { |mem, name| mem.merge(find_commands(name)) }
       end
 
-      def command_binstub
-        bindir.join(name)
+      def find_commands(name)
+        case name
+        when "--all"
+          commands = Spring.commands
+          commands.delete_if { |name, _| name.start_with?("rails_") }
+          commands["rails"] = RailsCommand.new
+          commands
+        when "rails"
+          { name => RailsCommand.new }
+        else
+          if command = Spring.commands[name]
+            { name => command }
+          else
+            $stderr.puts "The '#{name}' command is not known to spring."
+            exit 1
+          end
+        end
       end
 
-      def generate_spring_binstub
-        File.write(spring_binstub, <<'CODE')
+      def call
+        bindir.mkdir unless bindir.exist?
+        commands.each { |name, command| generate_binstub(name, command) }
+      end
+
+      def generate_binstub(name, command)
+        File.write(bindir.join(name), <<CODE)
 #!/usr/bin/env ruby
 
-# This is a special way of invoking the spring gem in order to
-# work around the performance issue discussed in
-# https://github.com/rubygems/rubygems/pull/435
-
-glob       = "{#{Gem::Specification.dirs.join(",")}}/spring-*.gemspec"
-candidates = Dir[glob].to_a.sort_by { |c| Gem::Version.new(File.basename(c).split(/[-\.]/)[1...-1].join(".")) }
-
-spec = Gem::Specification.load(candidates.last)
-
-if spec
-  spec.activate
-  load spec.bin_file("spring")
+if !Process.respond_to?(:fork) || Gem::Specification.find_all_by_name("spring").empty?
+#{fallback(name, command).strip.gsub(/^/, "  ")}
 else
-  $stderr.puts "Could not find spring gem in #{Gem::Specification.dirs.join(", ")}."
-  exit 1
+  ARGV.unshift "#{name}"
+  load Gem.bin_path("spring", "spring")
 end
 CODE
 
-        spring_binstub.chmod 0755
+        bindir.join(name).chmod 0755
       end
 
-      def generate_command_binstub
-        File.write(command_binstub, <<CODE)
-#!/usr/bin/env bash
-exec $(dirname $0)/spring #{name} "$@"
-CODE
-
-        command_binstub.chmod 0755
+      def fallback(name, command)
+        if command.respond_to?(:fallback)
+          command.fallback
+        else
+          %{exec "bundle", "exec", "#{name}", *ARGV}
+        end
       end
     end
   end
