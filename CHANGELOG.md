@@ -1,4 +1,4 @@
-## Next version
+## 1.1.0
 
 * A `bin/spring` binstub is now generated. This allows us to load spring
   correctly if you have it installed locally with a `BUNDLE_PATH`, so
@@ -13,6 +13,17 @@
   binstubs. This won't work unless you have upgraded your binstubs to
   the new format.
 * `config/database.yml` is watched
+* Better application restarts - if you introduce an error, for example
+  by editing `config/application.rb`, spring will now continue to watch
+  your files and will immediately try to restart the application when
+  you edit `config/application.rb` again (hopefully to correct the error).
+  This means that by the time you come to run a command the application
+  may well already be running.
+* Gemfile changes are now gracefully handled. Previously they would
+  cause spring to simply quit, meaning that you'd incur the full startup
+  penalty on the next run. Now spring doesn't quit, and will try to load
+  up your new bundle in the background.
+* Fix support for using spring with Rails engines/plugins
 
 ## 1.0.0
 

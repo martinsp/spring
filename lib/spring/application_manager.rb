@@ -1,20 +1,16 @@
-require "socket"
-require "thread"
-require "spring/application"
-
 module Spring
   class ApplicationManager
-    attr_reader :pid, :child, :app_env, :spring_env, :server
+    attr_reader :pid, :child, :app_env, :spring_env, :status
 
-    def initialize(server, app_env)
-      @server     = server
+    def initialize(app_env)
       @app_env    = app_env
       @spring_env = Env.new
       @mutex      = Mutex.new
+      @state      = :running
     end
 
     def log(message)
-      server.log(message)
+      spring_env.log "[application_manager:#{app_env}] #{message}"
     end
 
     # We're not using @mutex.synchronize to avoid the weird "<internal:prelude>:10"
@@ -28,10 +24,10 @@ module Spring
 
     def start
       start_child
-      start_wait_thread
     end
 
     def restart
+      return if @state == :stopping
       start_child(true)
     end
 
@@ -63,13 +59,15 @@ module Spring
     def run(client)
       with_child do
         child.send_io client
-        child.gets
+        child.gets or raise Errno::EPIPE
       end
 
-      pid = child.gets
-      pid = pid.chomp.to_i if pid
-      log "got worker pid #{pid}"
-      pid
+      pid = child.gets.to_i
+
+      unless pid.zero?
+        log "got worker pid #{pid}"
+        pid
+      end
     rescue Errno::ECONNRESET, Errno::EPIPE => e
       log "#{e} while reading from child; returning no pid"
       nil
@@ -78,45 +76,58 @@ module Spring
     end
 
     def stop
-      Process.kill('TERM', pid) if pid
+      @state = :stopping
+
+      if pid
+        Process.kill('TERM', pid)
+        Process.wait(pid)
+      end
     end
 
     private
 
     def start_child(preload = false)
-      server.application_starting
-
       @child, child_socket = UNIXSocket.pair
-      @pid = fork {
-        (ObjectSpace.each_object(IO).to_a - [STDOUT, STDERR, STDIN, child_socket])
-          .reject(&:closed?)
-          .each(&:close)
 
-        ENV['RAILS_ENV'] = ENV['RACK_ENV'] = app_env
+      Bundler.with_clean_env do
+        @pid = Process.spawn(
+          {
+            "RAILS_ENV"           => app_env,
+            "RACK_ENV"            => app_env,
+            "SPRING_ORIGINAL_ENV" => JSON.dump(Spring::ORIGINAL_ENV),
+            "SPRING_PRELOAD"      => preload ? "1" : "0"
+          },
+          "ruby",
+          "-I", File.expand_path("../..", __FILE__),
+          "-e", "require 'spring/application/boot'",
+          3 => child_socket
+        )
+      end
 
-        ProcessTitleUpdater.run { |distance|
-          "spring app    | #{spring_env.app_name} | started #{distance} ago | #{app_env} mode"
-        }
-
-        app = Application.new(child_socket)
-        app.preload if preload
-        app.run
-      }
+      start_wait_thread(pid, child) if child.gets
       child_socket.close
     end
 
-    def start_wait_thread
-      @wait_thread = Thread.new {
-        Thread.current.abort_on_exception = true
+    def start_wait_thread(pid, child)
+      Process.detach(pid)
 
-        while alive?
-          _, status = Process.wait2(pid)
-          @pid = nil
-
-          # In the forked child, this will block forever, so we won't
-          # return to the next iteration of the loop.
-          synchronize { restart if !alive? && status.success? }
+      Thread.new {
+        # The recv can raise an ECONNRESET, killing the thread, but that's ok
+        # as if it does we're no longer interested in the child
+        loop do
+          IO.select([child])
+          break if child.recv(1, Socket::MSG_PEEK).empty?
+          sleep 0.01
         end
+
+        log "child #{pid} shutdown"
+
+        synchronize {
+          if @pid == pid
+            @pid = nil
+            restart
+          end
+        }
       }
     end
   end

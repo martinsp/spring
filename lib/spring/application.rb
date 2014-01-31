@@ -1,39 +1,82 @@
+require "spring/boot"
 require "set"
-require "spring/watcher"
-require "thread"
 
 module Spring
   class Application
-    attr_reader :manager, :watcher, :spring_env
+    attr_reader :manager, :watcher, :spring_env, :original_env
 
-    def initialize(manager, watcher = Spring.watcher)
-      @manager    = manager
-      @watcher    = watcher
-      @spring_env = Env.new
-      @preloaded  = false
-      @mutex      = Mutex.new
-      @waiting    = 0
-      @exiting    = false
+    def initialize(manager, original_env)
+      @manager      = manager
+      @original_env = original_env
+      @spring_env   = Env.new
+      @mutex        = Mutex.new
+      @waiting      = 0
+      @preloaded    = false
+      @state        = :initialized
+      @interrupt    = IO.pipe
+    end
 
-      # Workaround for GC bug in Ruby 2 which causes segfaults if watcher.to_io
-      # instances get dereffed.
-      @fds = [manager, watcher.to_io]
+    def state(val)
+      return if exiting?
+      log "#{@state} -> #{val}"
+      @state = val
+    end
+
+    def state!(val)
+      state val
+      @interrupt.last.write "."
+    end
+
+    def app_env
+      ENV['RAILS_ENV']
+    end
+
+    def app_name
+      spring_env.app_name
     end
 
     def log(message)
-      spring_env.log "[application:#{ENV['RAILS_ENV']}] #{message}"
+      spring_env.log "[application:#{app_env}] #{message}"
     end
 
     def preloaded?
       @preloaded
     end
 
+    def preload_failed?
+      @preloaded == :failure
+    end
+
     def exiting?
-      @exiting
+      @state == :exiting
+    end
+
+    def terminating?
+      @state == :terminating
+    end
+
+    def watcher_stale?
+      @state == :watcher_stale
+    end
+
+    def initialized?
+      @state == :initialized
+    end
+
+    def start_watcher
+      @watcher = Spring.watcher
+      @watcher.on_stale { state! :watcher_stale }
+      @watcher.start
     end
 
     def preload
       log "preloading app"
+
+      begin
+        require "spring/commands"
+      ensure
+        start_watcher
+      end
 
       require Spring.application_root_path.join("config", "application")
 
@@ -50,45 +93,42 @@ module Spring
       Rails.application.config.cache_classes = false
       disconnect_database
 
+      @preloaded = :success
+    rescue Exception => e
+      @preloaded = :failure
+      watcher.add e.backtrace.map { |line| line.match(/^(.*)\:\d+\:in /)[1] }
+      raise e unless initialized?
+    ensure
       watcher.add loaded_application_features
       watcher.add Spring.gemfile, "#{Spring.gemfile}.lock"
-      watcher.add Rails.application.paths["config/initializers"]
-      watcher.add Rails.application.paths["config/database"]
 
-      @preloaded = true
+      if defined?(Rails)
+        watcher.add Rails.application.paths["config/initializers"]
+        watcher.add Rails.application.paths["config/database"]
+      end
     end
 
     def run
-      log "running"
-      watcher.start
+      state :running
+      manager.puts
 
       loop do
-        IO.select(@fds)
+        IO.select [manager, @interrupt.first]
 
-        if watcher.stale?
-          log "watcher stale; exiting"
-          manager.shutdown(:RDWR)
-          @exiting = true
-          try_exit
-          sleep
+        if terminating? || watcher_stale? || preload_failed?
+          exit
         else
           serve manager.recv_io(UNIXSocket)
         end
       end
     end
 
-    def try_exit
-      @mutex.synchronize {
-        exit if exiting? && @waiting == 0
-      }
-    end
-
     def serve(client)
       log "got client"
       manager.puts
 
-      streams = 3.times.map { client.recv_io }
-      [STDOUT, STDERR].zip(streams).each { |a, b| a.reopen(b) }
+      stdout, stderr, stdin = streams = 3.times.map { client.recv_io }
+      [STDOUT, STDERR].zip([stdout, stderr]).each { |a, b| a.reopen(b) }
 
       preload unless preloaded?
 
@@ -105,13 +145,15 @@ module Spring
 
       pid = fork {
         Process.setsid
-        STDIN.reopen(streams.last)
+        STDIN.reopen(stdin)
         IGNORE_SIGNALS.each { |sig| trap(sig, "DEFAULT") }
+        trap("TERM", "DEFAULT")
 
         ARGV.replace(args)
+        $0 = command.process_title
 
         # Delete all env vars which are unchanged from before spring started
-        Spring.original_env.each { |k, v| ENV.delete k if ENV[k] == v }
+        original_env.each { |k, v| ENV.delete k if ENV[k] == v }
 
         # Load in the current env vars, except those which *were* changed when spring started
         env.each { |k, v| ENV[k] ||= v }
@@ -147,15 +189,37 @@ module Spring
         client.close
 
         @mutex.synchronize { @waiting -= 1 }
-        try_exit
+        exit_if_finished
       }
 
-    rescue => e
+    rescue Exception => e
       log "exception: #{e}"
-      streams.each(&:close) if streams
-      client.puts(1)
+      manager.puts unless pid
+
+      if streams && !e.is_a?(SystemExit)
+        print_exception(stderr, e)
+        streams.each(&:close)
+      end
+
+      client.puts(1) if pid
       client.close
-      raise
+    end
+
+    def terminate
+      state! :terminating
+    end
+
+    def exit
+      state :exiting
+      manager.shutdown(:RDWR)
+      exit_if_finished
+      sleep
+    end
+
+    def exit_if_finished
+      @mutex.synchronize {
+        Kernel.exit if exiting? && @waiting == 0
+      }
     end
 
     # The command might need to require some files in the
@@ -174,7 +238,8 @@ module Spring
     end
 
     def loaded_application_features
-      $LOADED_FEATURES.select { |f| f.start_with?(File.realpath(Rails.root)) }
+      root = Spring.application_root_path.to_s
+      $LOADED_FEATURES.select { |f| f.start_with?(root) }
     end
 
     def disconnect_database
@@ -201,6 +266,12 @@ module Spring
           end
         end
       end
+    end
+
+    def print_exception(stream, error)
+      first, rest = error.backtrace.first, error.backtrace.drop(1)
+      stream.puts("#{first}: #{error} (#{error.class})")
+      rest.each { |line| stream.puts("\tfrom #{line}") }
     end
   end
 end

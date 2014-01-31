@@ -22,28 +22,22 @@ class AppTest < ActiveSupport::TestCase
     @app ||= Spring::Test::Application.new("#{TEST_ROOT}/apps/tmp")
   end
 
-  def debug(artifacts)
-    artifacts = artifacts.dup
-    artifacts.delete :status
-    app.dump_streams(artifacts.delete(:command), artifacts)
-  end
-
   def assert_output(artifacts, expected)
     expected.each do |stream, output|
       assert artifacts[stream].include?(output),
-             "expected #{stream} to include '#{output}'.\n\n#{debug(artifacts)}"
+             "expected #{stream} to include '#{output}'.\n\n#{app.debug(artifacts)}"
     end
   end
 
   def assert_success(command, expected_output = nil)
     artifacts = app.run(*Array(command))
-    assert artifacts[:status].success?, "expected successful exit status\n\n#{debug(artifacts)}"
+    assert artifacts[:status].success?, "expected successful exit status\n\n#{app.debug(artifacts)}"
     assert_output artifacts, expected_output if expected_output
   end
 
   def assert_failure(command, expected_output = nil)
     artifacts = app.run(*Array(command))
-    assert !artifacts[:status].success?, "expected unsuccessful exit status\n\n#{debug(artifacts)}"
+    assert !artifacts[:status].success?, "expected unsuccessful exit status\n\n#{app.debug(artifacts)}"
     assert_output artifacts, expected_output if expected_output
   end
 
@@ -299,14 +293,27 @@ CODE
     assert_success "bin/rake", stdout: "test"
   end
 
-  test "changing the Gemfile restarts the server" do
+  test "changing the Gemfile works" do
     assert_success %(bin/rails runner 'require "sqlite3"')
 
     File.write(app.gemfile, app.gemfile.read.sub(%{gem 'sqlite3'}, %{# gem 'sqlite3'}))
-    app.bundle
-
     app.await_reload
+
     assert_failure %(bin/rails runner 'require "sqlite3"'), stderr: "sqlite3"
+  end
+
+  test "changing the Gemfile works when spring calls into itself" do
+    File.write(app.path("script.rb"), <<-CODE)
+      gemfile = Rails.root.join("Gemfile")
+      File.write(gemfile, "\#{gemfile.read}gem 'devise'\\n")
+      Bundler.with_clean_env do
+        system(#{app.env.inspect}, "bundle install")
+      end
+      output = `\#{Rails.root.join('bin/rails')} runner 'require "devise"; puts "done";'`
+      exit output == "done\n"
+    CODE
+
+    assert_success [%(bin/rails runner 'load Rails.root.join("script.rb")'), timeout: 60]
   end
 
   test "changing the environment between runs" do

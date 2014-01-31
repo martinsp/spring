@@ -1,25 +1,12 @@
 module Spring
-  class << self
-    attr_reader :original_env
-  end
-  @original_env = ENV.to_hash
+  ORIGINAL_ENV = ENV.to_hash
 end
 
-require "socket"
-require "thread"
-
-require "spring/configuration"
-require "spring/env"
+require "spring/boot"
 require "spring/application_manager"
-require "spring/process_title_updater"
-require "spring/json"
 
-# Must be last, as it requires bundler/setup
+# Must be last, as it requires bundler/setup, which alters the load path
 require "spring/commands"
-
-# readline must be required before we setpgid, otherwise the require may hang,
-# if readline has been built against libedit. See issue #70.
-require "readline"
 
 module Spring
   class Server
@@ -31,7 +18,7 @@ module Spring
 
     def initialize(env = Env.new)
       @env          = env
-      @applications = Hash.new { |h, k| h[k] = ApplicationManager.new(self, k) }
+      @applications = Hash.new { |h, k| h[k] = ApplicationManager.new(k) }
       @pidfile      = env.pidfile_path.open('a')
       @mutex        = Mutex.new
     end
@@ -48,7 +35,6 @@ module Spring
       ignore_signals
       set_exit_hook
       set_process_title
-      watch_bundle
       start_server
     end
 
@@ -95,7 +81,7 @@ module Spring
     # Ignore SIGINT and SIGQUIT otherwise the user typing ^C or ^\ on the command line
     # will kill the server/application.
     def ignore_signals
-      IGNORE_SIGNALS.each { |sig| trap(sig,  "IGNORE") }
+      IGNORE_SIGNALS.each { |sig| trap(sig, "IGNORE") }
     end
 
     def set_exit_hook
@@ -106,13 +92,13 @@ module Spring
     end
 
     def shutdown
-      @applications.values.each(&:stop)
-
       [env.socket_path, env.pidfile_path].each do |path|
         if path.exist?
           path.unlink rescue nil
         end
       end
+
+      @applications.values.map { |a| Thread.new { a.stop } }.map(&:join)
     end
 
     def write_pidfile
@@ -137,14 +123,6 @@ module Spring
       ProcessTitleUpdater.run { |distance|
         "spring server | #{env.app_name} | started #{distance} ago"
       }
-    end
-
-    def watch_bundle
-      @bundle_mtime = env.bundle_mtime
-    end
-
-    def application_starting
-      @mutex.synchronize { exit if env.bundle_mtime != @bundle_mtime }
     end
   end
 end

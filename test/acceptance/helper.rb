@@ -202,6 +202,12 @@ module Spring
         output
       end
 
+      def debug(artifacts)
+        artifacts = artifacts.dup
+        artifacts.delete :status
+        dump_streams(artifacts.delete(:command), artifacts)
+      end
+
       def await_reload
         raise "no pid" if @application_pids.nil? || @application_pids.empty?
 
@@ -212,7 +218,9 @@ module Spring
 
       def run!(*args)
         artifacts = run(*args)
-        raise "command failed" unless artifacts[:status].success?
+        unless artifacts[:status].success?
+          raise "command failed\n\n#{debug(artifacts)}"
+        end
         artifacts
       end
 
@@ -246,13 +254,14 @@ module Spring
       end
 
       def system(command)
-        Kernel.system("#{command} > /dev/null") or raise "command failed: #{command}"
-      end
+        if ENV["SPRING_DEBUG"]
+          puts "$ #{command}\n"
+        else
+          command = "(#{command}) > /dev/null"
+        end
 
-      def bundle
-        return if @bundled
-        application.bundle
-        @bundled = true
+        Kernel.system(command) or raise "command failed: #{command}"
+        puts if ENV["SPRING_DEBUG"]
       end
 
       # Sporadic SSL errors keep causing test failures so there are anti-SSL workarounds here
@@ -283,7 +292,8 @@ module Spring
           end
         end
 
-        bundle
+        install_spring
+
         application.run! "bundle exec rails g scaffold post title:string"
         application.run! "bundle exec rake db:migrate db:test:clone"
       end
@@ -293,28 +303,26 @@ module Spring
       end
 
       def install_spring
-        unless @installed
-          # Need to do this here too because the app may have been generated with
-          # a different ruby
-          bundle
+        return if @installed
 
-          system("gem build spring.gemspec 2>/dev/null")
-          application.run! "gem install ../../../spring-#{Spring::VERSION}.gem", timeout: nil
+        system("gem build spring.gemspec 2>&1")
+        application.run! "gem install ../../../spring-#{Spring::VERSION}.gem", timeout: nil
 
-          FileUtils.rm_rf application.path("bin")
+        application.bundle
 
-          if application.path("bin_original").exist?
-            FileUtils.cp_r application.path("bin_original"), application.path("bin")
-          end
+        FileUtils.rm_rf application.path("bin")
 
-          application.run! "#{application.spring} binstub --all"
-          @installed = true
+        if application.path("bin_original").exist?
+          FileUtils.cp_r application.path("bin_original"), application.path("bin")
         end
+
+        application.run! "#{application.spring} binstub --all"
+        @installed = true
       end
 
       def copy_to(path)
-        FileUtils.rm_rf(path.to_s)
-        FileUtils.cp_r(application.root.to_s, path.to_s)
+        system("rm -rf #{path}")
+        system("cp -r #{application.root} #{path}")
       end
     end
   end
