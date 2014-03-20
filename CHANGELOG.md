@@ -1,3 +1,24 @@
+## 1.1.2
+
+* Detect old binstubs generated with Spring 1.0 and exit with an error.
+  This prevents a situation where you can get stuck in an infinite loop
+  of spring invocations.
+* Avoid `warning: already initialized constant APP_PATH` when running
+  rails commands that do not use spring (e.g. `bin/rails server` would
+  emit this when you ^C to exit)
+* Fix `reload!` in rails console
+* Don't connect/disconnect the database if there are no connections
+  configured. Issue #256.
+
+## 1.1.1
+
+* Fix `$0` so that it is no longer prefixed with "spring ", as doing
+  this cause issues with rspec when running just `rspec` with no
+  arguments.
+* Ensure we're always connected to a tty when preloading the
+  application in the background, in order to avoid loading issues
+  with readline + libedit which affected pry-rails.
+
 ## 1.1.0
 
 * A `bin/spring` binstub is now generated. This allows us to load spring

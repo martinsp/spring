@@ -1,5 +1,6 @@
 require "spring/boot"
 require "set"
+require "pty"
 
 module Spring
   class Application
@@ -90,7 +91,9 @@ module Spring
 
       require Spring.application_root_path.join("config", "environment")
 
+      @original_cache_classes = Rails.application.config.cache_classes
       Rails.application.config.cache_classes = false
+
       disconnect_database
 
       @preloaded = :success
@@ -102,10 +105,14 @@ module Spring
       watcher.add loaded_application_features
       watcher.add Spring.gemfile, "#{Spring.gemfile}.lock"
 
-      if defined?(Rails)
+      if defined?(Rails) && Rails.application
         watcher.add Rails.application.paths["config/initializers"]
         watcher.add Rails.application.paths["config/database"]
       end
+    end
+
+    def eager_preload
+      with_pty { preload }
     end
 
     def run
@@ -128,7 +135,7 @@ module Spring
       manager.puts
 
       stdout, stderr, stdin = streams = 3.times.map { client.recv_io }
-      [STDOUT, STDERR].zip([stdout, stderr]).each { |a, b| a.reopen(b) }
+      [STDOUT, STDERR, STDIN].zip(streams).each { |a, b| a.reopen(b) }
 
       preload unless preloaded?
 
@@ -144,8 +151,6 @@ module Spring
       end
 
       pid = fork {
-        Process.setsid
-        STDIN.reopen(stdin)
         IGNORE_SIGNALS.each { |sig| trap(sig, "DEFAULT") }
         trap("TERM", "DEFAULT")
 
@@ -158,9 +163,13 @@ module Spring
         # Load in the current env vars, except those which *were* changed when spring started
         env.each { |k, v| ENV[k] ||= v }
 
-        # requiring is faster, and we don't need constant reloading in this process
-        ActiveSupport::Dependencies.mechanism = :require
-        Rails.application.config.cache_classes = true
+        # requiring is faster, so if config.cache_classes was true in
+        # the environment's config file, then we can respect that from
+        # here on as we no longer need constant reloading.
+        if @original_cache_classes
+          ActiveSupport::Dependencies.mechanism = :require
+          Rails.application.config.cache_classes = true
+        end
 
         connect_database
         srand
@@ -172,7 +181,7 @@ module Spring
       }
 
       disconnect_database
-      [STDOUT, STDERR].each { |stream| stream.reopen(spring_env.log_file) }
+      reset_streams
 
       log "forked #{pid}"
       manager.puts pid
@@ -243,11 +252,11 @@ module Spring
     end
 
     def disconnect_database
-      ActiveRecord::Base.remove_connection if defined?(ActiveRecord::Base)
+      ActiveRecord::Base.remove_connection if active_record_configured?
     end
 
     def connect_database
-      ActiveRecord::Base.establish_connection if defined?(ActiveRecord::Base)
+      ActiveRecord::Base.establish_connection if active_record_configured?
     end
 
     # This feels very naughty
@@ -272,6 +281,25 @@ module Spring
       first, rest = error.backtrace.first, error.backtrace.drop(1)
       stream.puts("#{first}: #{error} (#{error.class})")
       rest.each { |line| stream.puts("\tfrom #{line}") }
+    end
+
+    def with_pty
+      PTY.open do |master, slave|
+        [STDOUT, STDERR, STDIN].each { |s| s.reopen slave }
+        yield
+        reset_streams
+      end
+    end
+
+    def reset_streams
+      [STDOUT, STDERR].each { |stream| stream.reopen(spring_env.log_file) }
+      STDIN.reopen("/dev/null")
+    end
+
+    private
+
+    def active_record_configured?
+      defined?(ActiveRecord::Base) && ActiveRecord::Base.configurations.any?
     end
   end
 end

@@ -23,7 +23,7 @@ module Spring
       end
 
       def bundles_spring?
-        version >= Gem::Version.new("4.1.0.beta1")
+        version.segments.take(2) == [4, 1] || version > Gem::Version.new("4.1")
       end
 
       def major
@@ -32,6 +32,10 @@ module Spring
 
       def minor
         version.segments[1]
+      end
+
+      def to_s
+        version.to_s
       end
     end
 
@@ -216,17 +220,25 @@ module Spring
         end
       end
 
-      def run!(*args)
-        artifacts = run(*args)
-        unless artifacts[:status].success?
+      def run!(command, options = {})
+        attempts  = (options.delete(:retry) || 0) + 1
+        artifacts = nil
+
+        until attempts == 0 || artifacts && artifacts[:status].success?
+          artifacts = run(command, options)
+          attempts -= 1
+        end
+
+        if artifacts[:status].success?
+          artifacts
+        else
           raise "command failed\n\n#{debug(artifacts)}"
         end
-        artifacts
       end
 
       def bundle
-        run! "(gem list bundler | grep bundler) || gem install bundler", timeout: nil
-        run! "bundle update", timeout: nil
+        run! "(gem list bundler | grep bundler) || gem install bundler", timeout: nil, retry: 2
+        run! "bundle update --retry=2", timeout: nil
       end
 
       private
@@ -267,13 +279,16 @@ module Spring
       # Sporadic SSL errors keep causing test failures so there are anti-SSL workarounds here
       def generate
         Bundler.with_clean_env do
-          system("(gem list rails --installed --version '#{version_constraint}' || " \
-                    "gem install rails --clear-sources --source http://rubygems.org --version '#{version_constraint}')")
+          system("gem list rails --installed --version '#{version_constraint}' || " \
+                   "gem install rails --clear-sources --source http://rubygems.org --version '#{version_constraint}'")
+
+          @version = RailsVersion.new(`ruby -e 'puts Gem::Specification.find_by_name("rails", "#{version_constraint}").version'`.chomp)
 
           skips = %w(--skip-bundle --skip-javascript --skip-sprockets)
           skips << "--skip-spring" if version.bundles_spring?
 
-          system("rails '_#{version_constraint}_' new #{application.root} #{skips.join(' ')}")
+          system("rails _#{version}_ new #{application.root} #{skips.join(' ')}")
+          raise "application generation failed" unless application.exists?
 
           FileUtils.mkdir_p(application.gem_home)
           FileUtils.mkdir_p(application.user_home)
