@@ -1,4 +1,4 @@
-gem "listen", "~> 2.1"
+gem "listen", "~> 2.7"
 require "listen"
 require "listen/version"
 
